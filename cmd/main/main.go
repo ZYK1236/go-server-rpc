@@ -1,90 +1,37 @@
 package main
 
 import (
-	"context"
 	"log"
-	"net"
-	"net/http"
-	"io/ioutil"
+	"sync"
 
-	pb "rpc-server/rpc-server/proto"
-
-	"google.golang.org/grpc"
+	"rpc-server/http"
+	"rpc-server/rpc"
 )
 
-type server struct {
-	pb.UnimplementedCalculatorServer
-}
-
-func (s *server) Add(ctx context.Context, in *pb.AddRequest) (*pb.AddResponse, error) {
-	return &pb.AddResponse{Result: in.A + in.B}, nil
-}
-
-func (s *server) GetBlog(ctx context.Context, in *pb.BlogRequest) (*pb.BlogResponse, error) {
-	// 构建文件路径
-	blogPath := "blogs/" + in.Name
-	
-	// 读取文件内容
-	content, err := ioutil.ReadFile(blogPath)
-	if err != nil {
-		// 如果文件不存在，返回未找到
-		return &pb.BlogResponse{Found: false}, nil
-	}
-	
-	// 返回文件内容
-	return &pb.BlogResponse{
-		Content: string(content),
-		Found:   true,
-	}, nil
-}
-
 func main() {
-	lis, err := net.Listen("tcp", ":50051")
-	if err != nil {
-		log.Fatalf("监听失败: %v", err)
-	}
+	// 创建等待组以等待所有goroutine完成
+	var wg sync.WaitGroup
 
-	s := grpc.NewServer()
-	pb.RegisterCalculatorServer(s, &server{})
-	// 启动HTTP服务器来提供博客内容
+	// 启动RPC服务器
+	wg.Add(1)
 	go func() {
-		http.HandleFunc("/blogs", func(w http.ResponseWriter, r *http.Request) {
-			// 使用相对路径读取blogs/index.md文件
-			blogPath := "blogs/index.md"
-			
-			// 读取文件内容
-			content, err := ioutil.ReadFile(blogPath)
-			if err != nil {
-				http.Error(w, "无法读取博客文件: " + err.Error(), http.StatusInternalServerError)
-				return
-			}
-			
-				// 设置CORS头
-			w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-			
-			// 处理预检请求
-			if r.Method == "OPTIONS" {
-				w.WriteHeader(http.StatusOK)
-				return
-			}
-			
-			// 设置响应头并返回内容
-			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			w.Write(content)
-		})
-		
-		log.Printf("HTTP服务器启动，监听端口: %d", 8080)
-		if err := http.ListenAndServe(":8080", nil); err != nil {
-			log.Printf("HTTP服务启动失败: %v", err)
+		defer wg.Done()
+		rpcServer := rpc.NewServer()
+		if err := rpcServer.Start(50051); err != nil {
+			log.Fatalf("RPC服务器启动失败: %v", err)
 		}
 	}()
 
-	log.Printf("gRPC服务器启动，监听端口: %d", 50051)
+	// 启动HTTP服务器
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		httpServer := http.NewServer()
+		if err := httpServer.Start(8080); err != nil {
+			log.Fatalf("HTTP服务器启动失败: %v", err)
+		}
+	}()
 
-	if err := s.Serve(lis); err != nil {
-		log.Fatalf("gRPC服务失败: %v", err)
-	}
+	// 等待所有服务器goroutine完成
+	wg.Wait()
 }

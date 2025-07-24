@@ -3,7 +3,7 @@ syntax = "proto3";
 
 package calculator;
 
-option go_package = "rpc-server/proto;calculator";
+option go_package = "rpc-server/pb;calculator";
 
 // 定义服务
 service Calculator {
